@@ -24,6 +24,7 @@ export interface StudentFormData {
   name: string;
   email: string;
   phone: string;
+  password?: string;
   profileImage?: File | null;
 }
 
@@ -33,6 +34,7 @@ function buildFormData(payload: Partial<StudentFormData>): FormData {
   if (payload.name !== undefined) fd.append('name', payload.name);
   if (payload.email !== undefined) fd.append('email', payload.email);
   if (payload.phone !== undefined) fd.append('phone', payload.phone);
+  if (payload.password) fd.append('password', payload.password);
   if (payload.profileImage) fd.append('profileImage', payload.profileImage);
   return fd;
 }

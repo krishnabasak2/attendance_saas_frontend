@@ -31,11 +31,20 @@ function initials(name: string) {
     .slice(0, 2);
 }
 
+const UPLOADS_BASE = (import.meta.env.VITE_UPLOADS_URL || 'http://localhost:5000').replace(/\/$/, '');
+
+function resolveImageUrl(src: string) {
+  // Already a full URL — use as-is
+  if (src.startsWith('http')) return src;
+  // Relative path like /uploads/students/... — prepend backend origin
+  return `${UPLOADS_BASE}${src}`;
+}
+
 export default function Avatar({ src, name, size = 'sm' }: AvatarProps) {
   if (src) {
     return (
       <img
-        src={src}
+        src={resolveImageUrl(src)}
         alt={name}
         className={`${sizes[size]} flex-shrink-0 rounded-full object-cover ring-2 ring-white`}
         onError={(e) => {

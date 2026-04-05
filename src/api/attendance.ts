@@ -45,6 +45,16 @@ export const attendanceApi = {
     return data;
   },
 
+  markSingle: async (payload: {
+    studentId: string;
+    institutionId: string;
+    date: string;
+    status: 'Present' | 'Absent';
+  }) => {
+    const { data } = await api.post('/attendance/single', payload);
+    return data;
+  },
+
   getReport: async (params: {
     institutionId: string;
     startDate?: string;

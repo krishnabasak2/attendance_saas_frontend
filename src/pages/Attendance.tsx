@@ -11,10 +11,13 @@ export default function Attendance() {
   const [date, setDate] = useState(todayISO());
   const [students, setStudents] = useState<AttendanceRecord[]>([]);
   const [statuses, setStatuses] = useState<Record<string, 'Present' | 'Absent'>>({});
+  // Per-student saving state
+  const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
+  const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
+  const [errorIds, setErrorIds] = useState<Record<string, string>>({});
   const [loadingStudents, setLoadingStudents] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [bulkMessage, setBulkMessage] = useState('');
 
   useEffect(() => {
     institutionsApi.getAll({ limit: 100 }).then((res) => {
@@ -26,49 +29,77 @@ export default function Attendance() {
   useEffect(() => {
     if (!selectedInstitution || !date) return;
     setLoadingStudents(true);
-    setMessage('');
-    setError('');
+    setBulkMessage('');
+    setSavedIds(new Set());
+    setErrorIds({});
     attendanceApi
       .getByDate(selectedInstitution, date)
       .then((res) => {
         setStudents(res.students);
         const map: Record<string, 'Present' | 'Absent'> = {};
-        res.students.forEach((s) => {
-          if (s.status) map[s.studentId] = s.status;
-        });
+        res.students.forEach((s) => { if (s.status) map[s.studentId] = s.status; });
         setStatuses(map);
       })
-      .catch((err) => setError(getErrorMessage(err)))
+      .catch(console.error)
       .finally(() => setLoadingStudents(false));
   }, [selectedInstitution, date]);
 
-  const setAll = (status: 'Present' | 'Absent') => {
-    const map: Record<string, 'Present' | 'Absent'> = {};
-    students.forEach((s) => { map[s.studentId] = status; });
-    setStatuses(map);
+  // Save attendance for one student immediately on button click
+  const markOne = async (studentId: string, status: 'Present' | 'Absent') => {
+    // Optimistic update
+    setStatuses((prev) => ({ ...prev, [studentId]: status }));
+    setSavingIds((prev) => new Set(prev).add(studentId));
+    setSavedIds((prev) => { const s = new Set(prev); s.delete(studentId); return s; });
+    setErrorIds((prev) => { const e = { ...prev }; delete e[studentId]; return e; });
+
+    try {
+      await attendanceApi.markSingle({
+        studentId,
+        institutionId: selectedInstitution,
+        date,
+        status,
+      });
+      setSavedIds((prev) => new Set(prev).add(studentId));
+    } catch (err) {
+      // Revert optimistic update on failure
+      setStatuses((prev) => { const s = { ...prev }; delete s[studentId]; return s; });
+      setErrorIds((prev) => ({ ...prev, [studentId]: getErrorMessage(err) }));
+    } finally {
+      setSavingIds((prev) => { const s = new Set(prev); s.delete(studentId); return s; });
+      // Clear the ✓ tick after 2 s
+      setTimeout(() => setSavedIds((prev) => { const s = new Set(prev); s.delete(studentId); return s; }), 2000);
+    }
   };
 
-  const handleSave = async () => {
+  const setAll = (status: 'Present' | 'Absent') => {
+    students.forEach((s) => markOne(s.studentId, status));
+  };
+
+  // Bulk save — marks everyone who isn't already persisted
+  const handleBulkSave = async () => {
+    const unmarked = students.filter((s) => !statuses[s.studentId]);
     const records = students.map((s) => ({
       studentId: s.studentId,
       status: statuses[s.studentId] || 'Absent',
     }));
     if (records.length === 0) return;
-    setSaving(true);
-    setMessage('');
-    setError('');
+    setBulkSaving(true);
+    setBulkMessage('');
     try {
       await attendanceApi.mark({ institutionId: selectedInstitution, date, records });
-      setMessage(`Attendance saved for ${records.length} student(s)!`);
+      setBulkMessage(`Saved ${records.length} student(s). ${unmarked.length} defaulted to Absent.`);
+      // Mark all as saved
+      setSavedIds(new Set(students.map((s) => s.studentId)));
+      setTimeout(() => setSavedIds(new Set()), 2000);
     } catch (err) {
-      setError(getErrorMessage(err));
+      setBulkMessage(getErrorMessage(err));
     } finally {
-      setSaving(false);
+      setBulkSaving(false);
     }
   };
 
-  const presentCount = students.filter((s) => statuses[s.studentId] === 'Present').length;
-  const absentCount  = students.filter((s) => statuses[s.studentId] === 'Absent').length;
+  const presentCount  = students.filter((s) => statuses[s.studentId] === 'Present').length;
+  const absentCount   = students.filter((s) => statuses[s.studentId] === 'Absent').length;
   const unmarkedCount = students.length - presentCount - absentCount;
 
   return (
@@ -86,9 +117,7 @@ export default function Attendance() {
             >
               <option value="">Select institution…</option>
               {institutions.map((i) => (
-                <option key={i._id} value={i._id}>
-                  {i.name} ({i.code})
-                </option>
+                <option key={i._id} value={i._id}>{i.name} ({i.code})</option>
               ))}
             </select>
           </div>
@@ -105,17 +134,6 @@ export default function Attendance() {
           </div>
         </div>
       </div>
-
-      {message && (
-        <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-          ✅ {message}
-        </div>
-      )}
-      {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
-        </div>
-      )}
 
       {selectedInstitution && date && (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
@@ -158,17 +176,18 @@ export default function Attendance() {
               {/* Student rows */}
               <ul className="divide-y divide-slate-100">
                 {students.map((s) => {
-                  const status = statuses[s.studentId];
+                  const status   = statuses[s.studentId];
+                  const isSaving = savingIds.has(s.studentId);
+                  const isSaved  = savedIds.has(s.studentId);
+                  const errMsg   = errorIds[s.studentId];
+
                   return (
                     <li
                       key={s.studentId}
                       className={`flex items-center justify-between px-5 py-3 transition-colors
-                        ${status === 'Present'
-                          ? 'bg-green-50/50'
-                          : status === 'Absent'
-                          ? 'bg-red-50/50'
-                          : 'hover:bg-slate-50'
-                        }`}
+                        ${status === 'Present' ? 'bg-green-50/50'
+                          : status === 'Absent'  ? 'bg-red-50/50'
+                          : 'hover:bg-slate-50'}`}
                     >
                       {/* Left: avatar + info */}
                       <div className="flex items-center gap-3 min-w-0">
@@ -179,34 +198,42 @@ export default function Attendance() {
                               {s.rollNo}
                             </span>
                             <span className="font-medium text-slate-800 truncate">{s.name}</span>
+                            {/* Inline feedback */}
+                            {isSaving && (
+                              <span className="text-xs text-slate-400 animate-pulse">saving…</span>
+                            )}
+                            {isSaved && !isSaving && (
+                              <span className="text-xs font-semibold text-green-600">✓ saved</span>
+                            )}
+                            {errMsg && (
+                              <span className="text-xs text-red-500" title={errMsg}>⚠ failed</span>
+                            )}
                           </div>
                           <p className="text-xs text-slate-500 truncate">{s.email}</p>
                         </div>
                       </div>
 
-                      {/* Right: Present / Absent toggles */}
+                      {/* Right: Present / Absent buttons */}
                       <div className="flex flex-shrink-0 gap-2 ml-3">
                         <button
-                          onClick={() =>
-                            setStatuses((p) => ({ ...p, [s.studentId]: 'Present' }))
-                          }
+                          disabled={isSaving}
+                          onClick={() => markOne(s.studentId, 'Present')}
                           className={`min-w-20 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors
+                            disabled:opacity-50
                             ${status === 'Present'
                               ? 'bg-green-600 text-white shadow-sm'
-                              : 'bg-slate-100 text-slate-600 hover:bg-green-50 hover:text-green-700'
-                            }`}
+                              : 'bg-slate-100 text-slate-600 hover:bg-green-50 hover:text-green-700'}`}
                         >
                           Present
                         </button>
                         <button
-                          onClick={() =>
-                            setStatuses((p) => ({ ...p, [s.studentId]: 'Absent' }))
-                          }
+                          disabled={isSaving}
+                          onClick={() => markOne(s.studentId, 'Absent')}
                           className={`min-w-20 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors
+                            disabled:opacity-50
                             ${status === 'Absent'
                               ? 'bg-red-600 text-white shadow-sm'
-                              : 'bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-700'
-                            }`}
+                              : 'bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-700'}`}
                         >
                           Absent
                         </button>
@@ -216,16 +243,24 @@ export default function Attendance() {
                 })}
               </ul>
 
-              {/* Save */}
-              <div className="border-t border-slate-200 px-6 py-4">
+              {/* Bulk save footer */}
+              <div className="flex items-center gap-4 border-t border-slate-200 px-6 py-4">
                 <button
-                  onClick={handleSave}
-                  disabled={saving || students.length === 0}
+                  onClick={handleBulkSave}
+                  disabled={bulkSaving}
                   className="rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-semibold
                     text-white hover:bg-indigo-700 disabled:opacity-60"
                 >
-                  {saving ? 'Saving…' : 'Save Attendance'}
+                  {bulkSaving ? 'Saving…' : 'Save All'}
                 </button>
+                {bulkMessage && (
+                  <p className="text-sm text-slate-600">{bulkMessage}</p>
+                )}
+                {unmarkedCount > 0 && !bulkSaving && (
+                  <p className="text-xs text-slate-400">
+                    {unmarkedCount} unmarked will default to Absent on Save All
+                  </p>
+                )}
               </div>
             </>
           )}

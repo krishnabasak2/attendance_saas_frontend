@@ -9,7 +9,7 @@ import Pagination from '../components/common/Pagination.tsx';
 import ConfirmDialog from '../components/common/ConfirmDialog.tsx';
 import { formatDate, getErrorMessage } from '../utils/helpers.ts';
 
-const emptyForm = { rollNo: '', name: '', email: '', phone: '' };
+const emptyForm = { rollNo: '', name: '', email: '', phone: '', password: '', confirmPassword: '' };
 
 export default function Students() {
   const { institutionId } = useParams<{ institutionId: string }>();
@@ -65,7 +65,7 @@ export default function Students() {
 
   const openEdit = (s: Student) => {
     setEditing(s);
-    setForm({ rollNo: s.rollNo, name: s.name, email: s.email, phone: s.phone });
+    setForm({ rollNo: s.rollNo, name: s.name, email: s.email, phone: s.phone, password: '', confirmPassword: '' });
     setImageFile(null);
     setImagePreview(s.profileImage ?? null);
     setFormError('');
@@ -88,10 +88,30 @@ export default function Students() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!institutionId) return;
+
+    // Password validation
+    if (!editing && !form.password) {
+      setFormError('Password is required');
+      return;
+    }
+    if (form.password && form.password.length < 6) {
+      setFormError('Password must be at least 6 characters');
+      return;
+    }
+    if (form.password !== form.confirmPassword) {
+      setFormError('Passwords do not match');
+      return;
+    }
+
     setSaving(true);
     setFormError('');
     try {
-      const payload = { ...form, profileImage: imageFile ?? undefined };
+      const { confirmPassword: _, ...formData } = form;
+      const payload = {
+        ...formData,
+        profileImage: imageFile ?? undefined,
+        ...(formData.password ? {} : { password: undefined }),
+      };
       if (editing) {
         await studentsApi.update(institutionId, editing._id, payload);
       } else {
@@ -333,6 +353,37 @@ export default function Students() {
               className="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm
                 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
             />
+          </div>
+
+          {/* Password */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                Password {editing && <span className="text-slate-400 font-normal">(leave blank to keep)</span>}
+              </label>
+              <input
+                type="password"
+                value={form.password}
+                onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+                required={!editing}
+                placeholder="••••••••"
+                minLength={6}
+                className="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm
+                  outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Confirm Password</label>
+              <input
+                type="password"
+                value={form.confirmPassword}
+                onChange={(e) => setForm((f) => ({ ...f, confirmPassword: e.target.value }))}
+                required={!editing || !!form.password}
+                placeholder="••••••••"
+                className="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm
+                  outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+              />
+            </div>
           </div>
 
           <div className="flex justify-end gap-3 pt-2">
